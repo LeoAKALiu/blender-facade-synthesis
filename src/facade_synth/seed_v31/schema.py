@@ -263,7 +263,7 @@ def validate_metadata(metadata: dict[str, Any]) -> None:
 def _validate_lighting_recipe(value: Any) -> None:
     if not isinstance(value, dict):
         raise ValidationError("lighting_recipe must be an object")
-    required = {"sun_elevation_deg", "relative_azimuth_deg", "energy", "world_strength", "exposure_ev", "colour_temperature_k"}
+    required = {"sun_elevation_deg", "relative_azimuth_deg", "energy", "world_strength", "exposure_ev", "colour_temperature_k", "intensity_scale"}
     if set(value) != required:
         raise ValidationError("lighting_recipe must contain the required actual lighting fields")
     for key in required:

@@ -4,8 +4,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from facade_synth.contracts import GenerationBrief, TaskKind
-from facade_synth.packages import RuntimeGateError, fingerprint_local_asset, plan_samples, validate_local_assets
+from facade_synth.contracts import GenerationBrief, GenerationJob, TaskKind
+from facade_synth.packages import (
+    RuntimeGateError,
+    _cancel_requested_at_sample_boundary,
+    fingerprint_local_asset,
+    plan_samples,
+    validate_local_assets,
+)
 
 
 class PackageContractTests(unittest.TestCase):
@@ -27,6 +33,18 @@ class PackageContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "divisible"):
             _brief(output_target=4)
 
+    def test_partial_view_family_is_not_a_first_release_brief(self) -> None:
+        with self.assertRaisesRegex(ValueError, "complete first-release view_family"):
+            GenerationBrief(
+                task=TaskKind.FACADE_COMPONENT_SEGMENTATION,
+                output_target=1,
+                split_ratio={"train": 1.0, "validation": 0.0, "test": 0.0},
+                building_use_distribution={"residential": 1.0},
+                render_width=64,
+                render_height=64,
+                view_family=("frontal",),
+            )
+
     def test_changed_confirmed_asset_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             asset = Path(temp_dir) / "facade.png"
@@ -40,6 +58,12 @@ class PackageContractTests(unittest.TestCase):
             asset.write_bytes(b"changed")
             with self.assertRaisesRegex(RuntimeGateError, "changed"):
                 validate_local_assets(brief)
+
+    def test_sample_boundary_observes_the_durable_cancellation_callback(self) -> None:
+        job = GenerationJob.new(_brief(output_target=3))
+
+        self.assertFalse(_cancel_requested_at_sample_boundary(job, lambda: False))
+        self.assertTrue(_cancel_requested_at_sample_boundary(job, lambda: True))
 
 
 def _brief(

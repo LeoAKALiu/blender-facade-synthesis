@@ -133,13 +133,38 @@ def _apply_visible_scene_truth_to_task_labels(
         component_semantic_mask == class_ids["window_glass"], 255, 0
     ).astype(np.uint8)
     instances = np.where(window_semantic > 0, base.window_instance_mask, 0).astype(np.uint8)
-    visible_ids = {int(value) for value in np.unique(instances) if int(value) != 0}
-    metadata["windows"]["instances"] = [
-        instance for instance in metadata["windows"]["instances"] if int(instance["id"]) in visible_ids
-    ]
+    visible_instances = []
+    for instance in metadata["windows"]["instances"]:
+        instance_id = int(instance["id"])
+        projected = base.window_instance_mask == instance_id
+        visible = instances == instance_id
+        total_pixels = int(np.count_nonzero(projected))
+        visible_pixels = int(np.count_nonzero(visible))
+        if visible_pixels == 0:
+            continue
+        visible_fraction = float(visible_pixels / total_pixels) if total_pixels else 0.0
+        instance["bbox_px"] = list(_mask_bbox(visible))
+        instance["visible_fraction"] = visible_fraction
+        instance["visibility_fraction"] = visible_fraction
+        instance["occluded"] = visible_fraction < 1.0
+        visible_instances.append(instance)
+    metadata["windows"]["instances"] = visible_instances
     metadata["windows"]["instance_count"] = len(metadata["windows"]["instances"])
-    floorlines = np.where(component_semantic_mask == class_ids["floor_band"], 255, 0).astype(np.uint8)
+    floor_band_visible = component_semantic_mask == class_ids["floor_band"]
+    floorlines = np.where(floor_band_visible, base.floorline_heatmap, 0).astype(np.uint8)
     roofline = np.where(component_semantic_mask == class_ids["roof_parapet"], 255, 0).astype(np.uint8)
+    metadata["geometry"]["floorline_polylines_px"] = _visible_floorline_segments(
+        metadata["geometry"]["floorline_polylines_px"],
+        floor_band_visible,
+    )
+    floor_visibility = []
+    for polygon in metadata["geometry"]["floor_index_polygons_px"]:
+        floor_mask = draw_polygon_mask(component_semantic_mask.shape[1], component_semantic_mask.shape[0], polygon) > 0
+        total_pixels = int(np.count_nonzero(floor_mask))
+        visible_pixels = int(np.count_nonzero(floor_mask & visible_facade))
+        floor_visibility.append(float(visible_pixels / total_pixels) if total_pixels else 0.0)
+    metadata["geometry"]["floor_visibility_fraction"] = floor_visibility
+    metadata["building"]["floor_count_visible"] = sum(value >= 0.5 for value in floor_visibility)
     return (
         np.where(visible_facade, 255, 0).astype(np.uint8),
         window_semantic,
@@ -147,6 +172,41 @@ def _apply_visible_scene_truth_to_task_labels(
         floorlines,
         roofline,
     )
+
+
+def _mask_bbox(mask: np.ndarray) -> tuple[int, int, int, int]:
+    ys, xs = np.where(mask)
+    if xs.size == 0 or ys.size == 0:
+        raise ValueError("visible raster mask must contain at least one pixel")
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+
+def _visible_floorline_segments(polylines: Sequence[Any], visible_mask: np.ndarray) -> list[list[list[int]]]:
+    """Retain only directly visible pieces of each floor-boundary polyline."""
+
+    segments: list[list[list[int]]] = []
+    height, width = visible_mask.shape
+    for polyline in polylines:
+        points = [(int(point[0]), int(point[1])) for point in polyline]
+        current: list[list[int]] = []
+        for start, end in zip(points, points[1:]):
+            steps = max(abs(end[0] - start[0]), abs(end[1] - start[1])) + 1
+            xs = np.rint(np.linspace(start[0], end[0], steps)).astype(np.int32)
+            ys = np.rint(np.linspace(start[1], end[1], steps)).astype(np.int32)
+            for x, y in zip(xs, ys, strict=True):
+                point = [int(x), int(y)]
+                visible = 0 <= x < width and 0 <= y < height and bool(visible_mask[y, x])
+                if visible:
+                    if not current or current[-1] != point:
+                        current.append(point)
+                elif len(current) >= 2:
+                    segments.append(current)
+                    current = []
+                else:
+                    current = []
+        if len(current) >= 2:
+            segments.append(current)
+    return segments
 
 
 def _sorted_contiguous_floor_regions(spec: FacadeStructureSpec) -> tuple[FloorRegion3D, ...]:

@@ -57,6 +57,7 @@ def render_rgb_for_structure_spec(
     render_samples: int,
     force_fallback: bool = False,
     occlusion_band: str = "clear",
+    lighting_intensity_scale: float = 1.0,
     asset_paths: tuple[str, ...] = (),
 ) -> np.ndarray:
     return _render_rgb_for_structure_spec_with_evidence(
@@ -66,6 +67,7 @@ def render_rgb_for_structure_spec(
         render_samples=render_samples,
         force_fallback=force_fallback,
         occlusion_band=occlusion_band,
+        lighting_intensity_scale=lighting_intensity_scale,
         asset_paths=asset_paths,
     ).rgb
 
@@ -78,6 +80,7 @@ def _render_rgb_for_structure_spec_with_evidence(
     render_samples: int,
     force_fallback: bool = False,
     occlusion_band: str = "clear",
+    lighting_intensity_scale: float = 1.0,
     asset_paths: tuple[str, ...] = (),
 ) -> _RenderResult:
     if force_fallback:
@@ -89,6 +92,7 @@ def _render_rgb_for_structure_spec_with_evidence(
             height=height,
             render_samples=render_samples,
             occlusion_band=occlusion_band,
+            lighting_intensity_scale=lighting_intensity_scale,
             asset_paths=asset_paths,
         )
         return _RenderResult(
@@ -116,6 +120,7 @@ def generate_dataset_v3(
     lighting_variant: str | None = None,
     material_variant: str | None = None,
     occlusion_band: str = "clear",
+    lighting_intensity_scale: float = 1.0,
     asset_paths: tuple[str, ...] = (),
 ) -> list[GeneratedSample]:
     return _generate_dataset_v3_with_evidence(
@@ -131,6 +136,7 @@ def generate_dataset_v3(
         lighting_variant=lighting_variant,
         material_variant=material_variant,
         occlusion_band=occlusion_band,
+        lighting_intensity_scale=lighting_intensity_scale,
         asset_paths=asset_paths,
     ).samples
 
@@ -149,6 +155,7 @@ def _generate_dataset_v3_with_evidence(
     lighting_variant: str | None = None,
     material_variant: str | None = None,
     occlusion_band: str = "clear",
+    lighting_intensity_scale: float = 1.0,
     asset_paths: tuple[str, ...] = (),
 ) -> _DatasetGenerationResult:
     if count < 0:
@@ -157,6 +164,8 @@ def _generate_dataset_v3_with_evidence(
         raise ValueError("width and height must be at least 32 pixels")
     if render_samples < 1:
         raise ValueError("render_samples must be positive")
+    if not 0.1 <= lighting_intensity_scale <= 4.0:
+        raise ValueError("lighting_intensity_scale must be within 0.1–4.0")
 
     selected_variants = _normalize_structure_variants(structure_variants)
     root = prepare_output_dir(output_dir)
@@ -186,6 +195,7 @@ def _generate_dataset_v3_with_evidence(
             render_samples=render_samples,
             force_fallback=force_fallback,
             occlusion_band=occlusion_band,
+            lighting_intensity_scale=lighting_intensity_scale,
             asset_paths=asset_paths,
         )
         if render_result.used_projection_fallback:
@@ -250,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lighting-variant", choices=("overcast", "morning_side", "late_afternoon", "soft_front"))
     parser.add_argument("--material-variant", choices=("concrete_light", "brick_warm", "stucco_cool", "painted_panel"))
     parser.add_argument("--occlusion-band", choices=("clear", "light_0_15", "moderate_15_30"), default="clear")
+    parser.add_argument("--lighting-intensity-scale", type=float, default=1.0)
     parser.add_argument("--asset-path", action="append", default=[])
     args = parser.parse_args(_script_args(argv))
 
@@ -268,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
             lighting_variant=args.lighting_variant,
             material_variant=args.material_variant,
             occlusion_band=args.occlusion_band,
+            lighting_intensity_scale=args.lighting_intensity_scale,
             asset_paths=tuple(args.asset_path),
         )
     except ValueError as exc:

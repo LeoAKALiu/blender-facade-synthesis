@@ -81,12 +81,15 @@ def build_blender_structure_scene(
     height: int,
     render_samples: int,
     occlusion_band: str = "clear",
+    lighting_intensity_scale: float = 1.0,
     asset_paths: Sequence[str] = (),
 ) -> None:
     if width <= 0 or height <= 0:
         raise ValueError("width and height must be positive")
     if render_samples <= 0:
         raise ValueError("render_samples must be positive")
+    if not 0.1 <= lighting_intensity_scale <= 4.0:
+        raise ValueError("lighting_intensity_scale must be within 0.1–4.0")
 
     import bpy
 
@@ -103,7 +106,8 @@ def build_blender_structure_scene(
     _create_balconies(bpy, spec.balconies, materials["balcony"])
     _create_environment_strips(bpy, spec, materials["sidewalk"], materials["road"])
     _create_ground(bpy, label_spec)
-    _create_lighting(bpy, label_spec)
+    _create_lighting(bpy, label_spec, intensity_scale=lighting_intensity_scale)
+    bpy.context.scene["facade_lighting_intensity_scale"] = float(lighting_intensity_scale)
     camera = _create_camera(bpy, label_spec)
     _create_controlled_foreground_occluder(bpy, spec, camera, materials["occluder"], occlusion_band)
     bpy.context.view_layer.update()
@@ -644,6 +648,7 @@ def _actual_lighting_recipe(bpy) -> dict[str, float]:
         "world_strength": round(world_strength, 4),
         "exposure_ev": float(bpy.context.scene.view_settings.exposure),
         "colour_temperature_k": 6500.0,
+        "intensity_scale": float(bpy.context.scene.get("facade_lighting_intensity_scale", 1.0)),
     }
 
 

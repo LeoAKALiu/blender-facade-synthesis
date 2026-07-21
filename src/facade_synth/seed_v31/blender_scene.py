@@ -469,19 +469,19 @@ def _create_ground(bpy, spec: FacadeSceneSpec):
     return ground
 
 
-def _create_lighting(bpy, spec: FacadeSceneSpec):
+def _create_lighting(bpy, spec: FacadeSceneSpec, *, intensity_scale: float = 1.0):
     height_m = spec.floor_count * spec.story_height_m
     if spec.lighting_variant in {"overcast", "soft_front"}:
         bpy.ops.object.light_add(type="AREA", location=(0.0, -spec.depth_m, height_m * 1.4))
         light = bpy.context.object
         light.name = f"{spec.lighting_variant}_area_light"
-        light.data.energy = 500.0 if spec.lighting_variant == "overcast" else 650.0
+        light.data.energy = (500.0 if spec.lighting_variant == "overcast" else 650.0) * intensity_scale
         light.data.size = max(spec.width_m, height_m) * 1.5
     else:
         bpy.ops.object.light_add(type="SUN", location=(0.0, -spec.depth_m, height_m * 1.8))
         light = bpy.context.object
         light.name = f"{spec.lighting_variant}_sun_light"
-        light.data.energy = 2.6
+        light.data.energy = 2.6 * intensity_scale
         if spec.lighting_variant == "morning_side":
             light.rotation_euler = (math.radians(52.0), 0.0, math.radians(-35.0))
         else:

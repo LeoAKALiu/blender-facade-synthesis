@@ -12,10 +12,10 @@ from fastapi.staticfiles import StaticFiles
 from .contracts import GenerationBrief, TaskKind
 from .packages import BlenderProcRenderer, fingerprint_local_asset
 from .runtime import BlenderProcRuntime
-from .studio import StudioService, TrainableRenderer
+from .studio import StudioService
 
 
-def create_app(*, workspace: Path, renderer: TrainableRenderer | None = None) -> FastAPI:
+def create_app(*, workspace: Path, renderer: BlenderProcRenderer | None = None) -> FastAPI:
     """Create a local Studio application with no browser-side render authority."""
 
     studio = StudioService(workspace=workspace, renderer=renderer or BlenderProcRenderer())
@@ -36,7 +36,7 @@ def create_app(*, workspace: Path, renderer: TrainableRenderer | None = None) ->
     def create_job(payload: Mapping[str, Any]) -> dict[str, Any]:
         try:
             job = studio.create_job(_brief_from_payload(payload))
-        except (KeyError, TypeError, ValueError) as exc:
+        except (KeyError, OSError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return job.to_dict()
 
@@ -50,11 +50,14 @@ def create_app(*, workspace: Path, renderer: TrainableRenderer | None = None) ->
 
     @app.post("/api/jobs/{job_id}/review")
     def review_job(job_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        approved = payload.get("approved")
+        if not isinstance(approved, bool):
+            raise HTTPException(status_code=422, detail="approved must be a JSON boolean")
         return _job_response(
             lambda: studio.record_review(
                 job_id,
                 reviewer=str(payload.get("reviewer", "")),
-                approved=bool(payload.get("approved")),
+                approved=approved,
             )
         )
 
@@ -112,19 +115,24 @@ body{font:15px system-ui,sans-serif;background:#f4f6f8;color:#172033;margin:0}ma
 <section class="card"><h2>Generation Brief</h2><div class="grid">
 <div><label>Task dataset</label><select id="task"><option value="window_instance_count">Window instances and count</option><option value="floorline_heatmap">Floorline heatmap</option><option value="visible_floor_count">Visible floor count</option><option value="building_use">Building use</option><option value="facade_component_segmentation">Facade component segmentation</option></select></div>
 <div><label>Exact output target</label><input id="count" type="number" min="3" step="3" value="9"></div><div><label>Seed</label><input id="seed" type="number" value="0"></div>
-<div><label>Daylight profile</label><select id="daylight"><option value="daylight_diverse">Daylight diverse</option><option value="controlled_daylight">Controlled clear / overcast</option></select></div>
+<div><label>Daylight profile</label><select id="daylight" onchange="syncDaylightDistribution()"><option value="daylight_diverse">Daylight diverse</option><option value="controlled_daylight">Controlled clear / overcast</option></select></div>
+<div><label>Lighting intensity minimum</label><input id="intensityMin" type="number" min="0.1" max="4" step="0.05" value="0.8"></div><div><label>Lighting intensity maximum</label><input id="intensityMax" type="number" min="0.1" max="4" step="0.05" value="1.2"></div>
+<div><label>Task visibility threshold</label><input id="visibility" type="number" min="0" max="1" step="0.05" value="0.50"></div>
 <div><label>Resolution width</label><input id="width" type="number" min="32" value="1024"></div><div><label>Resolution height</label><input id="height" type="number" min="32" value="768"></div>
 </div><p class="muted">Every Building Recipe emits the full view family (frontal, light/medium-oblique, strong-oblique), so the exact target must be a multiple of 3. Occlusion: clear, 0–15%, 15–30%.</p>
 <div class="grid"><div><label>Train split</label><input id="train" type="number" step="0.05" value="0.70"></div><div><label>Validation split</label><input id="validation" type="number" step="0.05" value="0.15"></div><div><label>Test split</label><input id="test" type="number" step="0.05" value="0.15"></div></div>
 <div class="grid"><div><label>Residential share</label><input id="residential" type="number" step="0.05" value="0.25"></div><div><label>Office share</label><input id="office" type="number" step="0.05" value="0.25"></div><div><label>Commercial share</label><input id="commercial" type="number" step="0.05" value="0.25"></div><div><label>Mixed-use share</label><input id="mixed" type="number" step="0.05" value="0.25"></div></div>
+<div class="grid"><div><label>Clear daylight share</label><input id="clear" type="number" min="0" max="1" step="0.05" value="0.25"></div><div><label>Overcast share</label><input id="overcast" type="number" min="0" max="1" step="0.05" value="0.25"></div><div><label>Warm low-angle share</label><input id="warm" type="number" min="0" max="1" step="0.05" value="0.25"></div><div><label>Backlit share</label><input id="backlit" type="number" min="0" max="1" step="0.05" value="0.25"></div></div>
+<div class="grid"><div><label>Clear occlusion share</label><input id="occlusionClear" type="number" min="0" max="1" step="0.05" value="0.3333333333333333"></div><div><label>Light occlusion share</label><input id="occlusionLight" type="number" min="0" max="1" step="0.05" value="0.3333333333333333"></div><div><label>Moderate occlusion share</label><input id="occlusionModerate" type="number" min="0" max="1" step="0.05" value="0.3333333333333333"></div></div>
 <label>Optional local PBR/HDRI asset paths (one per line; fingerprinted automatically)</label><textarea id="assets" rows="2"></textarea>
 <label class="row"><input id="humanConfirm" type="checkbox"> I have checked output target, angles, lighting, and building-use distribution.</label><button onclick="createAndConfirm()">Confirm Generation Brief and queue job</button><div id="message" class="muted"></div></section>
 <section class="card"><h2>Worker queue and manual publication</h2><div id="jobs">Loading…</div></section></main>
 <script>
 const api=async(url,opts={})=>{const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});const v=await r.json();if(!r.ok)throw Error(v.detail||JSON.stringify(v));return v};
 const val=id=>document.getElementById(id).value; const number=id=>Number(val(id));
+function syncDaylightDistribution(){if(val('daylight')==='controlled_daylight'){document.getElementById('clear').value='0.5';document.getElementById('overcast').value='0.5';document.getElementById('warm').value='0';document.getElementById('backlit').value='0'}}
 async function preflight(){try{const v=await api('/api/preflight');document.getElementById('preflight').textContent=`ready: BlenderProc ${v.blenderproc_version}, Blender ${v.blender_version}, NumPy ${v.numpy_version}`}catch(e){document.getElementById('preflight').textContent=`environment not ready: ${e.message}`}}
-function payload(){return {task:val('task'),output_target:number('count'),seed:number('seed'),render_width:number('width'),render_height:number('height'),daylight_profile:val('daylight'),split_ratio:{train:number('train'),validation:number('validation'),test:number('test')},building_use_distribution:{residential:number('residential'),office:number('office'),commercial:number('commercial'),mixed_use:number('mixed')},asset_paths:val('assets').split('\n').map(x=>x.trim()).filter(Boolean)}}
+function payload(){const daylight=val('daylight');const daylightDistribution=daylight==='controlled_daylight'?{clear:number('clear'),overcast:number('overcast')}:{clear:number('clear'),overcast:number('overcast'),warm_low_angle:number('warm'),backlit:number('backlit')};return {task:val('task'),output_target:number('count'),seed:number('seed'),render_width:number('width'),render_height:number('height'),daylight_profile:daylight,daylight_distribution:daylightDistribution,lighting_intensity_range:{min:number('intensityMin'),max:number('intensityMax')},occlusion_distribution:{clear:number('occlusionClear'),light_0_15:number('occlusionLight'),moderate_15_30:number('occlusionModerate')},task_visibility_threshold:number('visibility'),split_ratio:{train:number('train'),validation:number('validation'),test:number('test')},building_use_distribution:{residential:number('residential'),office:number('office'),commercial:number('commercial'),mixed_use:number('mixed')},asset_paths:val('assets').split('\n').map(x=>x.trim()).filter(Boolean)}}
 async function createAndConfirm(){try{if(!document.getElementById('humanConfirm').checked)throw Error('Human confirmation is required before queuing.');const j=await api('/api/jobs',{method:'POST',body:JSON.stringify(payload())});await api(`/api/jobs/${j.id}/confirm`,{method:'POST',body:JSON.stringify({confirmed_by:'local-reviewer'})});document.getElementById('message').textContent=`Queued ${j.id}`;loadJobs()}catch(e){document.getElementById('message').textContent=e.message}}
 async function act(id,action,body={}){try{await api(`/api/jobs/${id}/${action}`,{method:'POST',body:JSON.stringify(body)});loadJobs()}catch(e){alert(e.message)}}
 async function runNext(){try{await api('/api/jobs/run-next',{method:'POST'});loadJobs()}catch(e){alert(e.message)}}

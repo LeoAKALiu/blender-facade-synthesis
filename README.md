@@ -187,6 +187,8 @@ mypy
 BLENDERPROC_ACCEPTANCE=1 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_blenderproc_publication_acceptance.py' -v
 ```
 
+主要验收链路是：已确认的 Generation Brief 成功形成手工发布且带有 Dataset Receipt 的 Training Package；诊断输出不能成为可发布数据包。
+
 ## License
 
 本项目采用 [MIT License](LICENSE)。
