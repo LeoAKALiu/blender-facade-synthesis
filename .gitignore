@@ -203,6 +203,12 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Local visual-brainstorming sessions
+.superpowers/
+
+# Local isolated implementation worktrees
+.worktrees/
+
 # Ruff stuff:
 .ruff_cache/
 
