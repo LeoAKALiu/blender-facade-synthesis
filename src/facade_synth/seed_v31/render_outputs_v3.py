@@ -22,12 +22,39 @@ def build_projected_structure_sample(
     width: int,
     height: int,
     rgb: np.ndarray | None = None,
+    component_semantic_mask: np.ndarray | None = None,
+    scene_truth: Any | None = None,
+    asset_fingerprints: tuple[str, ...] = (),
 ) -> GeneratedSample:
     base = build_projected_sample(spec.label_scene_spec, width=width, height=height, rgb=rgb)
     metadata = copy.deepcopy(base.metadata)
     floor_regions = _sorted_contiguous_floor_regions(spec)
 
     metadata["generation_params"]["structure_variant"] = spec.structure_variant
+    metadata["generation_params"]["target_domain"] = "china_post_2000_urban_facades"
+    metadata["generation_params"]["asset_fingerprints"] = list(asset_fingerprints)
+    if scene_truth is not None:
+        metadata["generation_params"]["lighting_recipe"] = dict(scene_truth.lighting_recipe)
+        metadata["generation_params"]["occluder_variant"] = str(scene_truth.occluder_variant)
+        metadata["building"]["occlusion_ratio"] = round(float(scene_truth.occlusion_ratio), 4)
+        metadata["scene_truth"] = {
+            "component_mask_origin": "blender_object_index_pass",
+            "component_class_ids": {
+                name: index
+                for index, name in enumerate(
+                    (
+                        "facade_wall", "window_glass", "window_frame", "door", "balcony",
+                        "floor_band", "podium_storefront", "roof_parapet", "background",
+                    )
+                )
+            },
+            "visibility": {key: round(float(value), 6) for key, value in scene_truth.visibility.items()},
+        }
+    if component_semantic_mask is not None:
+        expected = (height, width)
+        if component_semantic_mask.shape != expected:
+            raise ValueError(f"component semantic mask must have shape {expected}")
+        metadata["labels"]["component_semantic_mask_path"] = f"masks/{spec.sample_id}_component_semantic_mask.png"
     metadata["geometry"]["floor_index_polygons_px"] = [
         _points_to_json(
             _project_nonempty_polygon(
@@ -57,18 +84,68 @@ def build_projected_structure_sample(
             height=height,
         )
 
+    facade_mask = base.facade_mask
+    window_semantic_mask = base.window_semantic_mask
+    window_instance_mask = base.window_instance_mask
+    floorline_heatmap = base.floorline_heatmap
+    roofline_heatmap = base.roofline_heatmap
+    if component_semantic_mask is not None:
+        facade_mask, window_semantic_mask, window_instance_mask, floorline_heatmap, roofline_heatmap = (
+            _apply_visible_scene_truth_to_task_labels(
+                base=base,
+                metadata=metadata,
+                component_semantic_mask=component_semantic_mask,
+            )
+        )
+
     validate_metadata(metadata)
     return GeneratedSample(
         metadata=metadata,
         rgb=base.rgb,
-        facade_mask=base.facade_mask,
-        window_semantic_mask=base.window_semantic_mask,
-        window_instance_mask=base.window_instance_mask,
-        floorline_heatmap=base.floorline_heatmap,
-        roofline_heatmap=base.roofline_heatmap,
+        facade_mask=facade_mask,
+        window_semantic_mask=window_semantic_mask,
+        window_instance_mask=window_instance_mask,
+        floorline_heatmap=floorline_heatmap,
+        roofline_heatmap=roofline_heatmap,
         groundline_heatmap=base.groundline_heatmap,
         depth=base.depth,
         normal=base.normal,
+    )
+
+
+def _apply_visible_scene_truth_to_task_labels(
+    *,
+    base: GeneratedSample,
+    metadata: dict[str, Any],
+    component_semantic_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Remove foreground-occluded evidence from all published task labels."""
+
+    class_ids = {
+        "facade_wall": 0,
+        "window_glass": 1,
+        "floor_band": 5,
+        "roof_parapet": 7,
+        "background": 8,
+    }
+    visible_facade = component_semantic_mask != class_ids["background"]
+    window_semantic = np.where(
+        component_semantic_mask == class_ids["window_glass"], 255, 0
+    ).astype(np.uint8)
+    instances = np.where(window_semantic > 0, base.window_instance_mask, 0).astype(np.uint8)
+    visible_ids = {int(value) for value in np.unique(instances) if int(value) != 0}
+    metadata["windows"]["instances"] = [
+        instance for instance in metadata["windows"]["instances"] if int(instance["id"]) in visible_ids
+    ]
+    metadata["windows"]["instance_count"] = len(metadata["windows"]["instances"])
+    floorlines = np.where(component_semantic_mask == class_ids["floor_band"], 255, 0).astype(np.uint8)
+    roofline = np.where(component_semantic_mask == class_ids["roof_parapet"], 255, 0).astype(np.uint8)
+    return (
+        np.where(visible_facade, 255, 0).astype(np.uint8),
+        window_semantic,
+        instances,
+        floorlines,
+        roofline,
     )
 
 

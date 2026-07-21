@@ -17,6 +17,7 @@ LABEL_PATH_KEYS = (
     "depth_path",
     "normal_path",
 )
+OPTIONAL_LABEL_PATH_KEYS = ("component_semantic_mask_path",)
 
 _TOP_LEVEL_KEYS = frozenset(
     (
@@ -29,10 +30,11 @@ _TOP_LEVEL_KEYS = frozenset(
         "geometry",
         "camera",
         "generation_params",
+        "scene_truth",
     )
 )
 _IMAGE_KEYS = frozenset(("width", "height", "rgb_path"))
-_LABEL_KEYS = frozenset(LABEL_PATH_KEYS)
+_LABEL_KEYS = frozenset((*LABEL_PATH_KEYS, *OPTIONAL_LABEL_PATH_KEYS))
 _BUILDING_KEYS = frozenset(
     (
         "archetype",
@@ -74,7 +76,16 @@ _CAMERA_KEYS = frozenset(("intrinsics", "extrinsics_cam_to_world", "view"))
 _CAMERA_INTRINSICS_KEYS = frozenset(("fx", "fy", "cx", "cy"))
 _CAMERA_VIEW_KEYS = frozenset(("azimuth_deg", "elevation_deg", "distance_m", "focal_length_mm"))
 _GENERATION_PARAMS_KEYS = frozenset(
-    ("seed", "material_variant", "lighting_variant", "occluder_variant", "structure_variant")
+    (
+        "seed",
+        "material_variant",
+        "lighting_variant",
+        "occluder_variant",
+        "structure_variant",
+        "target_domain",
+        "lighting_recipe",
+        "asset_fingerprints",
+    )
 )
 
 
@@ -142,6 +153,8 @@ def validate_metadata(metadata: dict[str, Any]) -> None:
     _reject_unknown_keys(labels, _LABEL_KEYS, "labels")
     for key in LABEL_PATH_KEYS:
         _require_dataset_path(labels, key)
+    if "component_semantic_mask_path" in labels:
+        _require_dataset_path(labels, "component_semantic_mask_path")
 
     building = _require_mapping(metadata, "building")
     _reject_unknown_keys(building, _BUILDING_KEYS, "building")
@@ -235,6 +248,49 @@ def validate_metadata(metadata: dict[str, Any]) -> None:
     _require_nonempty_string(generation_params, "occluder_variant")
     if "structure_variant" in generation_params:
         _require_nonempty_string(generation_params, "structure_variant")
+    if "target_domain" in generation_params:
+        _require_nonempty_string(generation_params, "target_domain")
+    if "lighting_recipe" in generation_params:
+        _validate_lighting_recipe(generation_params["lighting_recipe"])
+    if "asset_fingerprints" in generation_params:
+        value = generation_params["asset_fingerprints"]
+        if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+            raise ValidationError("asset_fingerprints must be a list of non-empty strings")
+    if "scene_truth" in metadata:
+        _validate_scene_truth(metadata["scene_truth"])
+
+
+def _validate_lighting_recipe(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValidationError("lighting_recipe must be an object")
+    required = {"sun_elevation_deg", "relative_azimuth_deg", "energy", "world_strength", "exposure_ev", "colour_temperature_k"}
+    if set(value) != required:
+        raise ValidationError("lighting_recipe must contain the required actual lighting fields")
+    for key in required:
+        if not isinstance(value[key], (int, float)) or not math.isfinite(float(value[key])):
+            raise ValidationError(f"lighting_recipe.{key} must be finite numeric")
+
+
+def _validate_scene_truth(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValidationError("scene_truth must be an object")
+    if value.get("component_mask_origin") != "blender_object_index_pass":
+        raise ValidationError("scene_truth.component_mask_origin must be blender_object_index_pass")
+    class_ids = value.get("component_class_ids")
+    expected_names = {
+        "facade_wall", "window_glass", "window_frame", "door", "balcony",
+        "floor_band", "podium_storefront", "roof_parapet", "background",
+    }
+    if not isinstance(class_ids, dict) or set(class_ids) != expected_names:
+        raise ValidationError("scene_truth.component_class_ids must contain the versioned vocabulary")
+    if {int(number) for number in class_ids.values()} != set(range(len(expected_names))):
+        raise ValidationError("scene_truth.component_class_ids must be contiguous 0..8")
+    visibility = value.get("visibility")
+    if not isinstance(visibility, dict) or "facade_components" not in visibility:
+        raise ValidationError("scene_truth.visibility must include facade_components")
+    for key, ratio in visibility.items():
+        if not isinstance(key, str) or not isinstance(ratio, (int, float)) or not 0.0 <= float(ratio) <= 1.0:
+            raise ValidationError("scene_truth.visibility values must be ratios")
 
 
 def _require_value(mapping: dict[str, Any], key: str, expected: Any) -> None:

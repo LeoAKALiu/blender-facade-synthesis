@@ -11,6 +11,7 @@ from PIL import Image, UnidentifiedImageError
 
 from facade_synth.seed_v31.schema import (
     LABEL_PATH_KEYS,
+    OPTIONAL_LABEL_PATH_KEYS,
     ValidationError,
     load_metadata,
     validate_dataset_path,
@@ -118,7 +119,8 @@ def _validate_sample_files(root: Path, metadata: dict[str, Any]) -> None:
         )
 
     labels = metadata["labels"]
-    for key in LABEL_PATH_KEYS:
+    image_label_keys = (*LABEL_PATH_KEYS, *(key for key in OPTIONAL_LABEL_PATH_KEYS if key in labels))
+    for key in image_label_keys:
         if key in ("depth_path", "normal_path"):
             continue
         array = _validate_image(root, labels[key], width, height, key)

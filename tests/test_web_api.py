@@ -20,7 +20,7 @@ class WebStudioApiTests(unittest.TestCase):
                 "/api/jobs",
                 json={
                     "task": "building_use",
-                    "output_target": 1,
+                    "output_target": 3,
                     "split_ratio": {"train": 1.0, "validation": 0.0, "test": 0.0},
                     "building_use_distribution": {"office": 1.0},
                     "render_width": 64,

@@ -57,6 +57,8 @@ class GenerationBrief:
     view_family: tuple[str, ...] = ("frontal", "light_medium_oblique", "strong_oblique")
     daylight_profile: str = "daylight_diverse"
     occlusion_profile: str = "light_controlled_occlusion"
+    target_domain: str = "china_post_2000_urban_facades"
+    asset_paths: tuple[str, ...] = ()
     asset_fingerprints: tuple[str, ...] = ()
     visibility_threshold: float = 0.5
 
@@ -76,10 +78,21 @@ class GenerationBrief:
         )
         if not self.view_family:
             raise ValueError("view_family must not be empty")
+        if len(set(self.view_family)) != len(self.view_family):
+            raise ValueError("view_family must not contain duplicate view bands")
+        supported_views = {"frontal", "light_medium_oblique", "strong_oblique"}
+        if not set(self.view_family).issubset(supported_views):
+            raise ValueError("view_family contains an unsupported view band")
+        if self.output_target % len(self.view_family) != 0:
+            raise ValueError("output_target must be divisible by the selected full view_family")
         if self.daylight_profile not in {"daylight_diverse", "controlled_daylight"}:
             raise ValueError("daylight_profile must be daylight_diverse or controlled_daylight")
         if self.occlusion_profile != "light_controlled_occlusion":
             raise ValueError("only light_controlled_occlusion is supported")
+        if self.target_domain != "china_post_2000_urban_facades":
+            raise ValueError("only china_post_2000_urban_facades is supported")
+        if len(self.asset_paths) != len(self.asset_fingerprints):
+            raise ValueError("asset_paths and asset_fingerprints must have matching lengths")
 
     @property
     def brief_hash(self) -> str:
@@ -98,6 +111,7 @@ class GenerationBrief:
         data = dict(value)
         data["task"] = TaskKind(data["task"])
         data["view_family"] = tuple(data.get("view_family", ()))
+        data["asset_paths"] = tuple(data.get("asset_paths", ()))
         data["asset_fingerprints"] = tuple(data.get("asset_fingerprints", ()))
         return cls(**data)
 
@@ -173,6 +187,10 @@ class DatasetReceipt:
     blenderproc_version: str
     asset_fingerprints: tuple[str, ...]
     published_by: str
+    sample_seeds: tuple[int, ...]
+    actual_render_parameters: tuple[Mapping[str, Any], ...]
+    validation_evidence: Mapping[str, Any]
+    publication_decision: Mapping[str, Any]
     validation_status: str = "passed"
 
     def to_dict(self) -> dict[str, Any]:

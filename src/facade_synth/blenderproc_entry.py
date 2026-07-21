@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "runtime": "blenderproc_blender",
+                    "blenderproc_version": str(getattr(bproc, "__version__", "unknown")),
                     "blender_version": bpy.app.version_string,
                     "numpy_version": np.__version__,
                 },

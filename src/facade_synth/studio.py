@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import threading
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
+
+from PIL import Image
 
 from .contracts import DatasetReceipt, GenerationBrief, GenerationJob, JobState, RenderedPackage
 
@@ -29,6 +32,15 @@ class InMemoryTrainableRenderer:
         for index in range(job.brief.output_target):
             sample_id = f"facade_{index:06d}"
             split = split_names[index % len(split_names)]
+            image_path = package_dir / "images" / f"{sample_id}.png"
+            annotation_path = package_dir / "annotations" / f"{sample_id}.json"
+            source_metadata_path = package_dir / "metadata" / f"{sample_id}.json"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            annotation_path.parent.mkdir(parents=True, exist_ok=True)
+            source_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (2, 2), "white").save(image_path)
+            annotation_path.write_text("{}", encoding="utf-8")
+            source_metadata_path.write_text("{}", encoding="utf-8")
             record = {
                 "sample_id": sample_id,
                 "split": split,
@@ -36,12 +48,32 @@ class InMemoryTrainableRenderer:
                 "validated": True,
                 "render_backend": "blenderproc_blender",
                 "used_projection_fallback": False,
+                "rgb_path": image_path.relative_to(package_dir).as_posix(),
+                "annotation_path": annotation_path.relative_to(package_dir).as_posix(),
+                "source_metadata_path": source_metadata_path.relative_to(package_dir).as_posix(),
+                "render_parameters": {
+                    "seed": job.brief.seed + index,
+                    "lighting_recipe": {
+                        "sun_elevation_deg": 45.0,
+                        "relative_azimuth_deg": 0.0,
+                        "energy": 1.0,
+                        "world_strength": 1.0,
+                        "exposure_ev": 0.0,
+                        "colour_temperature_k": 6500.0,
+                    },
+                },
             }
             records.append(record)
         (package_dir / "manifest.jsonl").write_text(
             "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
             encoding="utf-8",
         )
+        (package_dir / "qa_summary.json").write_text(
+            json.dumps({"sample_count": len(records)}), encoding="utf-8"
+        )
+        preview = package_dir / "preview"
+        preview.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (2, 2), "white").save(preview / "contact_sheet.png")
         return RenderedPackage(
             package_dir=str(package_dir),
             validated_sample_count=len(records),
@@ -174,6 +206,7 @@ class StudioService:
             or job.blenderproc_version is None
         ):
             raise ValueError("completed package evidence is missing")
+        package_evidence = self._validate_package_for_publication(job)
         receipt = DatasetReceipt(
             job_id=job.id,
             task=job.brief.task.value,
@@ -186,6 +219,20 @@ class StudioService:
             blenderproc_version=job.blenderproc_version,
             asset_fingerprints=job.brief.asset_fingerprints,
             published_by=published_by,
+            sample_seeds=tuple(sorted({int(record["render_parameters"]["seed"]) for record in package_evidence["records"]})),
+            actual_render_parameters=tuple(record["render_parameters"] for record in package_evidence["records"]),
+            validation_evidence={
+                "validated_sample_count": job.validated_sample_count,
+                "manifest_sha256": package_evidence["manifest_sha256"],
+                "qa_summary_sha256": package_evidence["qa_summary_sha256"],
+                "contact_sheet_sha256": package_evidence["contact_sheet_sha256"],
+            },
+            publication_decision={
+                "reviewer": job.reviewed_by,
+                "review_approved": job.review_approved,
+                "published_by": published_by,
+                "manual_publication_required": True,
+            },
         )
         receipt_path = Path(job.package_dir) / "receipt.json"
         receipt_path.write_text(json.dumps(receipt.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
@@ -201,6 +248,38 @@ class StudioService:
         manifest = Path(rendered.package_dir) / "manifest.jsonl"
         if not manifest.exists():
             raise ValueError("renderer did not write a package manifest")
+        required = ("qa_summary.json", "preview/contact_sheet.png")
+        if any(not (Path(rendered.package_dir) / relative).exists() for relative in required):
+            raise ValueError("renderer did not write complete QA artifacts")
+
+    def _validate_package_for_publication(self, job: GenerationJob) -> dict[str, Any]:
+        if job.package_dir is None:
+            raise ValueError("completed package evidence is missing")
+        package_dir = Path(job.package_dir)
+        manifest = package_dir / "manifest.jsonl"
+        qa_summary = package_dir / "qa_summary.json"
+        contact_sheet = package_dir / "preview" / "contact_sheet.png"
+        if not manifest.exists() or not qa_summary.exists() or not contact_sheet.exists():
+            raise ValueError("publication requires manifest, QA summary, and contact sheet")
+        try:
+            records = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
+            qa = json.loads(qa_summary.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"package evidence is unreadable: {exc}") from exc
+        if len(records) != job.brief.output_target or qa.get("sample_count") != job.brief.output_target:
+            raise ValueError("package QA evidence does not match the confirmed output target")
+        for record in records:
+            for key in ("rgb_path", "annotation_path", "source_metadata_path"):
+                if not (package_dir / str(record.get(key, ""))).exists():
+                    raise ValueError(f"package evidence references a missing {key}")
+            if not isinstance(record.get("render_parameters"), dict):
+                raise ValueError("package evidence lacks actual render parameters")
+        return {
+            "records": records,
+            "manifest_sha256": _sha256_file(manifest),
+            "qa_summary_sha256": _sha256_file(qa_summary),
+            "contact_sheet_sha256": _sha256_file(contact_sheet),
+        }
 
     def _load_jobs(self) -> None:
         for file_path in (self.workspace / "jobs").glob("*.json"):
@@ -227,3 +306,7 @@ class StudioService:
             )
             temporary_name = file_handle.name
         Path(temporary_name).replace(target)
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
