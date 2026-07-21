@@ -361,4 +361,3 @@ def _bounds(corners: object) -> tuple[float, float, float, float, float, float]:
 
 def _darken(rgba: tuple[float, float, float, float], factor: float) -> tuple[float, float, float, float]:
     return (rgba[0] * factor, rgba[1] * factor, rgba[2] * factor, rgba[3])
-

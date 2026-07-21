@@ -447,4 +447,3 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValidationError(f"duplicate JSON object key: {key}")
         result[key] = value
     return result
-

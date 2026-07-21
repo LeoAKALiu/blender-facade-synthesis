@@ -112,4 +112,3 @@ def _convolve_axis(image: np.ndarray, kernel: np.ndarray, *, axis: int) -> np.nd
         else:
             output += padded[:, kernel_index : kernel_index + image.shape[1]] * weight
     return output
-

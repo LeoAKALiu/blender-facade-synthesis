@@ -476,4 +476,3 @@ def _validate_artifact_arrays(
         raise ValueError("depth must be a finite float32 HxW array")
     if normal.shape != (height, width, 3) or normal.dtype != np.float32 or not np.isfinite(normal).all():
         raise ValueError("normal must be a finite float32 HxWx3 array")
-

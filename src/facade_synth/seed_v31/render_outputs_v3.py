@@ -189,4 +189,3 @@ def _polygon_bbox(polygon: Sequence[Point2D], *, width: int, height: int, label:
 
 def _points_to_json(points: Sequence[Point2D]) -> list[list[int]]:
     return [[int(x), int(y)] for x, y in points]
-
