@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blender-facade-synthesis"
+version = "0.1.0"
+description = "Local Web Studio and BlenderProc Worker for synthetic facade training packages"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "numpy>=1.24", "Pillow>=10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.mypy]
+files = [
+  "src/facade_synth/contracts.py",
+  "src/facade_synth/runtime.py",
+  "src/facade_synth/studio.py",
+  "src/facade_synth/packages.py",
+  "src/facade_synth/web.py",
+  "src/facade_synth/__main__.py",
+]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["blenderproc", "bpy", "mathutils"]
+ignore_missing_imports = true
