@@ -6,8 +6,8 @@
 
 首版聚焦于 **2000 年以来建成或完成实质性改造的中国城市建筑立面**，覆盖住宅、办公、商业和混合用途建筑。
 
-> [!IMPORTANT]
-> 项目当前处于“规格与架构决策完成、实现待启动”阶段。仓库已经确定首版范围、数据契约、技术路线和实施任务，但 Web Studio、Worker 与生成器代码尚未正式落入本仓库。第一个可执行任务是 [SFS-01：吸收 V3.1 生成器并建立 BlenderProc 预检](https://github.com/LeoAKALiu/blender-facade-synthesis/issues/2)。
+> [!NOTE]
+> 首版 Web Studio、串行 BlenderProc Worker 和五类任务数据包已在本仓库实现。生成仍须经过真实 BlenderProc/Blender 渲染、完整校验和人工发布确认，诊断或回退输出不能发布。
 
 ## 项目要解决的问题
 
@@ -161,6 +161,33 @@ Dataset Receipt 将绑定 Generation Brief 哈希、代码 Git SHA、Blender/Ble
 - [GitHub Issues](https://github.com/LeoAKALiu/blender-facade-synthesis/issues)：实施任务、依赖关系和验收标准。
 
 开发时应优先维护外部可观察的数据契约：真实 Blender 渲染、场景真值、配方级数据划分、任务原生标注、失败封闭以及可复现的发布记录。如果实现需要改变已有 ADR，应先补充或替代对应决策，而不是在代码中静默偏离。
+
+## 本地运行
+
+Worker 需要可用的 BlenderProc 和 Blender 运行时；它不会以直接 Blender 或投影输出替代可发布的 Training Package。
+
+```bash
+python3 -m pip install -e .
+python3 -m facade_synth --workspace .facade-synthesis
+```
+
+打开 `http://127.0.0.1:8787`，先执行 BlenderProc 预检，再确认 Generation Brief。完成渲染后，检查联系表与 QA 摘要，并显式确认发布。数据包写入工作区，不写入源代码目录。
+
+## 验证
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+ruff check src tests
+mypy
+```
+
+在具有 BlenderProc 的机器上，还应运行真实发布验收：
+
+```bash
+BLENDERPROC_ACCEPTANCE=1 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_blenderproc_publication_acceptance.py' -v
+```
+
+主要验收链路是：已确认的 Generation Brief 成功形成手工发布且带有 Dataset Receipt 的 Training Package；诊断输出不能成为可发布数据包。
 
 ## License
 

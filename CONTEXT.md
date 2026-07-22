@@ -92,6 +92,13 @@ asset-fingerprint and label validation. Projection fallbacks may never be part
 of it.
 _Avoid_: successful job, preview package
 
+**BlenderProc preflight**:
+The Worker-side check that initializes BlenderProc before importing NumPy or
+generator modules and records Blender plus embedded-NumPy evidence. Failure is
+reported as an environment-not-ready state and never causes a direct Blender or
+projection fallback.
+_Avoid_: fallback renderer, optional startup check
+
 **Diagnostic preview**:
 An inspectable non-trainable render or projection output retained to explain a
 failed job or support development.
