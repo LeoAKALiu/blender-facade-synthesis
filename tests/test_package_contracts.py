@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
+from unittest.mock import patch
 
 from facade_synth.contracts import GenerationBrief, GenerationJob, TaskKind
 from facade_synth.packages import (
+    BlenderProcRenderer,
     RuntimeGateError,
     _cancel_requested_at_sample_boundary,
     fingerprint_local_asset,
     plan_samples,
     validate_local_assets,
 )
+from facade_synth.seed_v31.validate_dataset import DatasetValidationError
 
 
 class PackageContractTests(unittest.TestCase):
@@ -65,6 +70,51 @@ class PackageContractTests(unittest.TestCase):
         self.assertFalse(_cancel_requested_at_sample_boundary(job, lambda: False))
         self.assertTrue(_cancel_requested_at_sample_boundary(job, lambda: True))
 
+    def test_invalid_resume_cache_is_quarantined_and_rerendered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_dir = Path(temp_dir) / "package"
+            job = GenerationJob.new(_brief(output_target=3))
+            planned = plan_samples(job.brief)[0]
+            sample_root = package_dir / "seed_samples" / planned.sample_id
+            sample_root.mkdir(parents=True)
+            provenance = {
+                "brief_hash": job.brief.brief_hash,
+                "renderer_identity": BlenderProcRenderer.identity,
+                "code_revision": "0123456789abcdef",
+                "blender_version": "4.2.1",
+                "blenderproc_version": "2.8.0",
+            }
+            cached_record = {"sample_id": planned.sample_id, "recipe_id": planned.recipe_id}
+            (sample_root / "validated_record.json").write_text(
+                json.dumps(
+                    {"provenance": provenance, "planned_sample": asdict(planned), "record": cached_record}
+                ),
+                encoding="utf-8",
+            )
+            runtime = _RerenderingRuntime()
+            replacement_record = {"sample_id": planned.sample_id, "recipe_id": planned.recipe_id}
+            renderer = BlenderProcRenderer(runtime=runtime)
+
+            with (
+                patch("facade_synth.packages._code_revision", return_value="0123456789abcdef"),
+                patch("facade_synth.packages.plan_samples", return_value=[planned]),
+                patch(
+                    "facade_synth.packages.validate_dataset",
+                    side_effect=[DatasetValidationError("stale cached sample"), None],
+                ),
+                patch("facade_synth.packages.build_task_record", return_value=replacement_record),
+                patch("facade_synth.packages.validate_task_records"),
+                patch("facade_synth.packages.validate_task_annotations"),
+                patch("facade_synth.packages.write_contact_sheet"),
+                patch("facade_synth.packages.write_qa_summary"),
+            ):
+                renderer.render(job, package_dir)
+
+            self.assertEqual(1, runtime.generate_calls)
+            self.assertEqual("rerendered", (sample_root / "stale-marker.txt").read_text(encoding="utf-8"))
+            self.assertTrue((sample_root / "validated_record.json").exists())
+            self.assertTrue(any((package_dir / "invalid_samples").iterdir()))
+
 
 def _brief(
     *,
@@ -82,6 +132,27 @@ def _brief(
         asset_paths=asset_paths,
         asset_fingerprints=asset_fingerprints,
     )
+
+
+class _RerenderingRuntime:
+    def __init__(self) -> None:
+        self.generate_calls = 0
+
+    def preflight(self) -> dict[str, str]:
+        return {"blender_version": "4.2.1", "blenderproc_version": "2.8.0"}
+
+    def run_generator(self, arguments: tuple[str, ...]) -> dict[str, object]:
+        self.generate_calls += 1
+        output_dir = Path(arguments[arguments.index("--output-dir") + 1])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "stale-marker.txt").write_text("rerendered", encoding="utf-8")
+        return {
+            "sample_count": 1,
+            "rendered_with_blender_count": 1,
+            "projection_fallback_count": 0,
+            "used_projection_fallback": False,
+            "render_backend": "blenderproc_blender",
+        }
 
 
 if __name__ == "__main__":

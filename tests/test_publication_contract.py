@@ -134,6 +134,35 @@ class PublicationContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "source artifacts changed"):
                 studio.publish(job.id, published_by="leo")
 
+    def test_publication_rejects_lighting_that_disagrees_with_the_confirmed_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            studio, job = _ready_building_use_job(Path(temp_dir))
+            package_dir = Path(job.package_dir or "")
+            records = _read_records(package_dir)
+            planned_intensity = records[0]["lighting_intensity_scale"]
+            actual_intensity = planned_intensity + 0.0000005
+            records[0]["lighting_intensity_scale"] = actual_intensity
+            records[0]["render_parameters"]["lighting_recipe"]["intensity_scale"] = actual_intensity
+            _write_records(package_dir, records)
+            studio.record_review(job.id, reviewer="leo", approved=True)
+
+            with self.assertRaisesRegex(ValueError, "lighting intensity"):
+                studio.publish(job.id, published_by="leo")
+
+    def test_publication_revalidates_the_persisted_blenderproc_run_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            studio, job = _ready_building_use_job(Path(temp_dir))
+            package_dir = Path(job.package_dir or "")
+            record = _read_records(package_dir)[0]
+            summary_path = package_dir / "seed_samples" / record["sample_id"] / "run_summary.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["render_backend"] = "direct_blender"
+            summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            studio.record_review(job.id, reviewer="leo", approved=True)
+
+            with self.assertRaisesRegex(ValueError, "render backend"):
+                studio.publish(job.id, published_by="leo")
+
     def test_confirmed_brief_distributions_are_immutable(self) -> None:
         brief = _brief()
         with self.assertRaises(TypeError):
@@ -167,6 +196,18 @@ def _write_frozen_building_use_package(package_dir: Path, job: object) -> list[d
         metadata.parent.mkdir(parents=True, exist_ok=True)
         rgb.parent.mkdir(parents=True, exist_ok=True)
         metadata.write_text("{}", encoding="utf-8")
+        (sample_root / "run_summary.json").write_text(
+            json.dumps(
+                {
+                    "sample_count": 1,
+                    "rendered_with_blender_count": 1,
+                    "projection_fallback_count": 0,
+                    "used_projection_fallback": False,
+                    "render_backend": "blenderproc_blender",
+                }
+            ),
+            encoding="utf-8",
+        )
         Image.new("RGB", (2, 2), "white").save(rgb)
         annotation = package_dir / "annotations" / f"{planned.sample_id}.json"
         annotation.parent.mkdir(parents=True, exist_ok=True)

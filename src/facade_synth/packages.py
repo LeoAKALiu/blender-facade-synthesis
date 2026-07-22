@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 import subprocess
 from dataclasses import asdict, dataclass
@@ -23,7 +24,7 @@ from .contracts import (
     TaskKind,
 )
 from .runtime import BlenderProcRuntime, RuntimeGateError, validate_render_summary
-from .seed_v31.validate_dataset import validate_dataset
+from .seed_v31.validate_dataset import DatasetValidationError, validate_dataset
 
 
 class RenderCancelled(RuntimeGateError):
@@ -87,16 +88,22 @@ class BlenderProcRenderer:
                     provenance=provenance,
                 )
                 if cached_record is not None:
-                    validate_dataset(sample_root)
-                    validate_task_records(
-                        (cached_record,),
-                        brief=job.brief,
-                        package_dir=package_dir,
-                        allow_partial_recipe=True,
-                    )
-                    validate_task_annotations((cached_record,), package_dir=package_dir, brief=job.brief)
-                    records.append(cached_record)
-                    continue
+                    try:
+                        validate_dataset(sample_root)
+                        validate_task_records(
+                            (cached_record,),
+                            brief=job.brief,
+                            package_dir=package_dir,
+                            allow_partial_recipe=True,
+                        )
+                        validate_task_annotations((cached_record,), package_dir=package_dir, brief=job.brief)
+                    except (DatasetValidationError, OSError, RuntimeGateError, TypeError, ValueError, KeyError):
+                        _quarantine_invalid_resume_sample(sample_root, package_dir)
+                    else:
+                        records.append(cached_record)
+                        continue
+                else:
+                    _quarantine_invalid_resume_sample(sample_root, package_dir)
             sample_root.parent.mkdir(parents=True, exist_ok=True)
             arguments: list[str] = [
                     "--output-dir",
@@ -215,6 +222,7 @@ def build_task_record(
 ) -> dict[str, Any]:
     source_metadata_path = seed_root / "metadata" / "facade_000000_metadata.json"
     metadata = json.loads(source_metadata_path.read_text(encoding="utf-8"))
+    render_summary = _load_validated_render_summary(seed_root)
     source_prefix = seed_root.relative_to(package_dir).as_posix()
     rgb_path = f"{source_prefix}/{metadata['image']['rgb_path']}"
     labels = metadata["labels"]
@@ -242,8 +250,8 @@ def build_task_record(
         "annotation_path": annotation_path.relative_to(package_dir).as_posix(),
         "source_metadata_path": f"{source_prefix}/metadata/facade_000000_metadata.json",
         "source_artifact_sha256": source_artifact_sha256(seed_root),
-        "render_backend": "blenderproc_blender",
-        "used_projection_fallback": False,
+        "render_backend": render_summary["render_backend"],
+        "used_projection_fallback": render_summary["used_projection_fallback"],
         "building_use": planned.building_use,
         "view_band": planned.view_band,
         "daylight_condition": planned.daylight_condition,
@@ -453,6 +461,7 @@ def validate_task_records(
 ) -> None:
     if not allow_partial_recipe and len(records) != brief.output_target:
         raise RuntimeGateError("package records do not match confirmed output_target")
+    planned_by_id = {sample.sample_id: sample for sample in plan_samples(brief)}
     recipes: dict[str, tuple[str, set[str]]] = {}
     for record in records:
         if record.get("task") != brief.task.value:
@@ -481,6 +490,13 @@ def validate_task_records(
         render_parameters = record.get("render_parameters")
         if not isinstance(render_parameters, Mapping) or "lighting_recipe" not in render_parameters:
             raise RuntimeGateError("sample lacks actual Blender lighting recipe evidence")
+        sample_id = record.get("sample_id")
+        if not isinstance(sample_id, str):
+            raise RuntimeGateError("package record has an invalid sample identifier")
+        planned = planned_by_id.get(sample_id)
+        if planned is None:
+            raise RuntimeGateError("package record does not belong to the confirmed sample plan")
+        _validate_lighting_intensity(record, render_parameters, planned, brief)
         _validate_occlusion_band(str(record.get("occlusion_band")), record.get("occlusion_ratio"))
         for key in ("rgb_path", "annotation_path", "source_metadata_path"):
             if not (package_dir / str(record[key])).exists():
@@ -489,6 +505,12 @@ def validate_task_records(
         expected_source_digest = record.get("source_artifact_sha256")
         if not isinstance(expected_source_digest, str) or len(expected_source_digest) != 64:
             raise RuntimeGateError("package record lacks a source artifact digest")
+        render_summary = _load_validated_render_summary(source_metadata_path.parent.parent)
+        if (
+            record.get("render_backend") != render_summary["render_backend"]
+            or record.get("used_projection_fallback") is not render_summary["used_projection_fallback"]
+        ):
+            raise RuntimeGateError("package record disagrees with persisted BlenderProc render evidence")
         if source_artifact_sha256(source_metadata_path.parent.parent) != expected_source_digest:
             raise RuntimeGateError("sample source artifacts changed after validation")
         expected_task_digest = record.get("task_artifact_sha256")
@@ -501,6 +523,40 @@ def validate_task_records(
         for _recipe_id, (_split, views) in recipes.items():
             if views != expected_views:
                 raise RuntimeGateError("each Building Recipe must contain the complete confirmed view family")
+
+
+def _validate_lighting_intensity(
+    record: Mapping[str, Any],
+    render_parameters: Mapping[str, Any],
+    planned: PlannedSample,
+    brief: GenerationBrief,
+) -> None:
+    """Bind the Blender-written light recipe to the immutable plan and brief range."""
+
+    lighting_recipe = render_parameters.get("lighting_recipe")
+    if not isinstance(lighting_recipe, Mapping):
+        raise RuntimeGateError("sample lacks actual Blender lighting recipe evidence")
+    actual = lighting_recipe.get("intensity_scale")
+    recorded = record.get("lighting_intensity_scale")
+    if (
+        isinstance(actual, bool)
+        or isinstance(recorded, bool)
+        or not isinstance(actual, (int, float))
+        or not isinstance(recorded, (int, float))
+    ):
+        raise RuntimeGateError("sample lacks a numeric actual lighting intensity")
+    actual_value = float(actual)
+    recorded_value = float(recorded)
+    if not math.isfinite(actual_value) or not math.isfinite(recorded_value):
+        raise RuntimeGateError("sample has a non-finite lighting intensity")
+    minimum = float(brief.lighting_intensity_range["min"])
+    maximum = float(brief.lighting_intensity_range["max"])
+    if not minimum <= actual_value <= maximum:
+        raise RuntimeGateError("sample actual lighting intensity is outside the confirmed brief range")
+    if actual_value != planned.lighting_intensity_scale:
+        raise RuntimeGateError("sample actual lighting intensity does not match its confirmed plan")
+    if recorded_value != actual_value:
+        raise RuntimeGateError("sample record does not bind lighting intensity to its Blender recipe")
 
 
 def validate_task_annotations(
@@ -602,6 +658,38 @@ def _load_cached_record(
     if record.get("sample_id") != planned.sample_id or record.get("recipe_id") != planned.recipe_id:
         return None
     return record
+
+
+def _quarantine_invalid_resume_sample(sample_root: Path, package_dir: Path) -> None:
+    """Preserve a failed resume candidate while making its planned sample rerenderable."""
+
+    if not sample_root.exists():
+        return
+    quarantine_dir = package_dir / "invalid_samples"
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    destination = quarantine_dir / sample_root.name
+    suffix = 1
+    while destination.exists():
+        destination = quarantine_dir / f"{sample_root.name}-{suffix}"
+        suffix += 1
+    try:
+        sample_root.replace(destination)
+    except OSError as exc:
+        raise RuntimeGateError("cannot quarantine an invalid cached Facade Sample") from exc
+
+
+def _load_validated_render_summary(seed_root: Path) -> dict[str, Any]:
+    """Read the Worker-written summary instead of trusting manifest literals."""
+
+    summary_path = seed_root / "run_summary.json"
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeGateError("sample lacks a readable BlenderProc run summary") from exc
+    if not isinstance(summary, dict):
+        raise RuntimeGateError("sample BlenderProc run summary must be an object")
+    validate_render_summary(summary, expected_count=1)
+    return summary
 
 
 def validate_frozen_sample_records(
