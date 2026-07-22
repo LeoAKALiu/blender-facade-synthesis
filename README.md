@@ -9,6 +9,15 @@
 > [!NOTE]
 > 首版 Web Studio、串行 BlenderProc Worker 和五类任务数据包已在本仓库实现。生成仍须经过真实 BlenderProc/Blender 渲染、完整校验和人工发布确认，诊断或回退输出不能发布。
 
+## 当前可用能力
+
+- 本地 Web Studio 可创建、确认、排队、取消、恢复、复核和发布 Generation Job；浏览器不直接调用 Blender，也不写入数据集文件。
+- Worker 只接受仓库自有的 BlenderProc 渲染路径。每个任务按样本串行执行，并为窗户实例、楼层线、可见楼层数、建筑用途和立面构件分割分别生成 Training Package。
+- 每个 Facade Sample 都保存 BlenderProc 运行摘要、场景真值、任务原生标注和校验记录。后端、投影回退状态和实际光照配方会在发布时重新验证。
+- 本地视觉资产在任务开始、每个样本边界和发布前按内容指纹复核；内容变化、缺失资产、投影回退或不完整标签都会使任务失败封闭。
+- 工作区路径、状态文件和锁使用同一规范化目录。中断任务仅复用已验证样本；无效缓存会保留在 `invalid_samples/` 并只重渲该样本。
+- 发布必须经过人工复核，并写入绑定 Brief、代码版本、Blender/BlenderProc 版本、资产指纹和实际渲染参数的不可变 Dataset Receipt。
+
 ## 项目要解决的问题
 
 真实建筑图像的精细标注成本高，窗户实例、楼层分界线、构件分割等标签尤其难以批量、准确地制作。合成数据可以从三维场景直接计算标签，但只有同时满足以下条件，生成结果才真正适合训练：
@@ -141,7 +150,7 @@ Dataset Receipt 将绑定 Generation Brief 哈希、代码 Git SHA、Blender/Ble
 
 ## 实施路线图
 
-当前实施工作按 GitHub Issues 中的依赖关系推进：
+GitHub Issues 保留首版范围、依赖关系和验收跟踪；代码实现与 Issue 关闭状态分别维护。因此，以下条目是首版交付范围，不应仅因 Issue 仍开放而推断对应能力尚未落地：
 
 1. [SFS-01](https://github.com/LeoAKALiu/blender-facade-synthesis/issues/2)：吸收经过评估的 V3.1 生成器，打通真实 BlenderProc 冒烟渲染；
 2. [SFS-02](https://github.com/LeoAKALiu/blender-facade-synthesis/issues/3)：实现 Web Studio、Worker 和首个窗户实例/计数数据包闭环；
