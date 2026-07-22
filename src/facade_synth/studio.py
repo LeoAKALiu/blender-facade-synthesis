@@ -27,7 +27,7 @@ class StudioService:
     """Persistent local studio lifecycle with explicit review and publication."""
 
     def __init__(self, *, workspace: Path, renderer: BlenderProcRenderer) -> None:
-        self.workspace = Path(workspace)
+        self.workspace = Path(workspace).resolve()
         if type(renderer) is not BlenderProcRenderer:
             raise ValueError("StudioService accepts only the owned BlenderProcRenderer")
         self.renderer = renderer
@@ -47,18 +47,27 @@ class StudioService:
             return job
 
     def get_job(self, job_id: str) -> GenerationJob:
+        with self._workspace_state_lock():
+            self._reload_jobs()
+            return self._get_loaded_job(job_id)
+
+    def _get_loaded_job(self, job_id: str) -> GenerationJob:
+        """Return a job after the caller has refreshed durable workspace state."""
+
         try:
             return self._jobs[job_id]
         except KeyError as exc:
             raise ValueError(f"unknown job: {job_id}") from exc
 
     def list_jobs(self) -> list[GenerationJob]:
-        return sorted(self._jobs.values(), key=lambda job: job.queue_sequence)
+        with self._workspace_state_lock():
+            self._reload_jobs()
+            return sorted(self._jobs.values(), key=lambda job: job.queue_sequence)
 
     def confirm_brief(self, job_id: str, *, confirmed_by: str) -> GenerationJob:
         with self._workspace_state_lock():
             self._reload_jobs()
-            job = self.get_job(job_id)
+            job = self._get_loaded_job(job_id)
             if job.state is not JobState.DRAFT:
                 raise ValueError("only a draft brief can be confirmed")
             if not confirmed_by.strip():
@@ -106,14 +115,14 @@ class StudioService:
         except Exception as exc:
             with self._workspace_state_lock():
                 self._reload_jobs()
-                current = self.get_job(queued.id)
+                current = self._get_loaded_job(queued.id)
                 current.state = JobState.CANCELLED if current.cancelled_requested else JobState.FAILED
                 current.failure_reason = str(exc)
                 self._save(current)
             raise
         with self._workspace_state_lock():
             self._reload_jobs()
-            current = self.get_job(queued.id)
+            current = self._get_loaded_job(queued.id)
             current.package_dir = rendered.package_dir
             current.validated_sample_count = rendered.validated_sample_count
             current.renderer_identity = rendered.renderer_identity
@@ -127,7 +136,7 @@ class StudioService:
     def record_review(self, job_id: str, *, reviewer: str, approved: bool) -> GenerationJob:
         with self._workspace_state_lock():
             self._reload_jobs()
-            job = self.get_job(job_id)
+            job = self._get_loaded_job(job_id)
             if job.state is not JobState.READY_FOR_REVIEW:
                 raise ValueError("only a completed job can be reviewed")
             if not reviewer.strip():
@@ -140,7 +149,7 @@ class StudioService:
     def cancel(self, job_id: str) -> GenerationJob:
         with self._workspace_state_lock():
             self._reload_jobs()
-            job = self.get_job(job_id)
+            job = self._get_loaded_job(job_id)
             if job.state in {JobState.DRAFT, JobState.QUEUED}:
                 job.state = JobState.CANCELLED
             elif job.state is JobState.RUNNING:
@@ -153,7 +162,7 @@ class StudioService:
     def resume(self, job_id: str) -> GenerationJob:
         with self._workspace_state_lock():
             self._reload_jobs()
-            job = self.get_job(job_id)
+            job = self._get_loaded_job(job_id)
             if job.state not in {JobState.FAILED, JobState.CANCELLED}:
                 raise ValueError("only failed or cancelled jobs can be resumed")
             if job.confirmed_by is None:
@@ -168,7 +177,7 @@ class StudioService:
     def publish(self, job_id: str, *, published_by: str) -> DatasetReceipt:
         with self._workspace_state_lock():
             self._reload_jobs()
-            job = self.get_job(job_id)
+            job = self._get_loaded_job(job_id)
             if job.state is not JobState.READY_FOR_REVIEW:
                 raise ValueError("only a completed job can be published")
             if job.review_approved is not True:
@@ -184,6 +193,8 @@ class StudioService:
             or job.blenderproc_version is None
             ):
                 raise ValueError("completed package evidence is missing")
+            if job.renderer_identity != BlenderProcRenderer.identity:
+                raise ValueError("completed package lacks owned BlenderProc identity evidence")
             package_evidence = self._validate_package_for_publication(job)
             receipt = DatasetReceipt(
             job_id=job.id,

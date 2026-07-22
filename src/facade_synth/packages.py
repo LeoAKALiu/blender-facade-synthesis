@@ -79,6 +79,7 @@ class BlenderProcRenderer:
         for sample in plan:
             if _cancel_requested_at_sample_boundary(job, cancellation_requested):
                 raise RenderCancelled("job cancelled at a Facade Sample boundary")
+            validate_local_assets(job.brief)
             sample_root = package_dir / "seed_samples" / sample.sample_id
             validated_record = sample_root / "validated_record.json"
             if validated_record.exists():

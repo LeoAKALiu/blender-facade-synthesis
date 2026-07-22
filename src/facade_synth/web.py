@@ -21,8 +21,8 @@ def create_app(*, workspace: Path, renderer: BlenderProcRenderer | None = None) 
     studio = StudioService(workspace=workspace, renderer=renderer or BlenderProcRenderer())
     app = FastAPI(title="Blender Facade Synthesis Studio")
     app.state.studio = studio
-    app.state.workspace = Path(workspace)
-    app.mount("/packages", StaticFiles(directory=workspace / "packages"), name="packages")
+    app.state.workspace = studio.workspace
+    app.mount("/packages", StaticFiles(directory=studio.workspace / "packages"), name="packages")
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import subprocess
 import unittest
+from unittest.mock import patch
 
-from facade_synth.runtime import RuntimeGateError, validate_render_summary
+from facade_synth.runtime import BlenderProcRuntime, EnvironmentNotReady, RuntimeGateError, validate_render_summary
 
 
 class RuntimeGateTests(unittest.TestCase):
@@ -30,6 +32,24 @@ class RuntimeGateTests(unittest.TestCase):
             },
             expected_count=2,
         )
+
+    def test_generator_process_failure_is_not_an_environment_preflight_failure(self) -> None:
+        runtime = BlenderProcRuntime()
+        failed_run = subprocess.CompletedProcess((), returncode=2, stdout="scene failure", stderr="")
+
+        with patch("facade_synth.runtime.subprocess.run", return_value=failed_run):
+            with self.assertRaises(RuntimeGateError) as caught:
+                runtime.run_generator(("--output-dir", "sample"))
+
+        self.assertNotIsInstance(caught.exception, EnvironmentNotReady)
+
+    def test_preflight_process_failure_remains_an_environment_failure(self) -> None:
+        runtime = BlenderProcRuntime()
+        failed_run = subprocess.CompletedProcess((), returncode=2, stdout="", stderr="broken runtime")
+
+        with patch("facade_synth.runtime.subprocess.run", return_value=failed_run):
+            with self.assertRaises(EnvironmentNotReady):
+                runtime.preflight()
 
 
 if __name__ == "__main__":

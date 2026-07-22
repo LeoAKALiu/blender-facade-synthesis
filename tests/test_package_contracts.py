@@ -115,6 +115,36 @@ class PackageContractTests(unittest.TestCase):
             self.assertTrue((sample_root / "validated_record.json").exists())
             self.assertTrue(any((package_dir / "invalid_samples").iterdir()))
 
+    def test_confirmed_assets_are_revalidated_before_each_facade_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_dir = Path(temp_dir) / "package"
+            job = GenerationJob.new(_brief(output_target=3))
+            plan = plan_samples(job.brief)[:2]
+            runtime = _RerenderingRuntime()
+            renderer = BlenderProcRenderer(runtime=runtime)
+
+            with (
+                patch("facade_synth.packages._code_revision", return_value="0123456789abcdef"),
+                patch("facade_synth.packages.plan_samples", return_value=plan),
+                patch("facade_synth.packages.validate_local_assets") as validate_assets,
+                patch("facade_synth.packages.validate_dataset"),
+                patch(
+                    "facade_synth.packages.build_task_record",
+                    side_effect=[
+                        {"sample_id": sample.sample_id, "recipe_id": sample.recipe_id}
+                        for sample in plan
+                    ],
+                ),
+                patch("facade_synth.packages.validate_task_records"),
+                patch("facade_synth.packages.validate_task_annotations"),
+                patch("facade_synth.packages.write_contact_sheet"),
+                patch("facade_synth.packages.write_qa_summary"),
+            ):
+                renderer.render(job, package_dir)
+
+            self.assertEqual(1 + len(plan), validate_assets.call_count)
+            self.assertEqual(len(plan), runtime.generate_calls)
+
 
 def _brief(
     *,

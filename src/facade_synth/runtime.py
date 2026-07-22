@@ -40,7 +40,7 @@ class BlenderProcRuntime:
     entrypoint: Path = Path(__file__).with_name("blenderproc_entry.py")
 
     def preflight(self) -> dict[str, Any]:
-        result = self._run(("run", str(self.entrypoint), "--preflight"))
+        result = self._run(("run", str(self.entrypoint), "--preflight"), failure_type=EnvironmentNotReady)
         try:
             evidence = _last_json_object(result.stdout)
         except ValueError as exc:
@@ -50,13 +50,15 @@ class BlenderProcRuntime:
         return evidence
 
     def run_generator(self, arguments: Sequence[str]) -> dict[str, Any]:
-        result = self._run(("run", str(self.entrypoint), "--", *arguments))
+        result = self._run(("run", str(self.entrypoint), "--", *arguments), failure_type=RuntimeGateError)
         try:
             return _last_json_object(result.stdout)
         except ValueError as exc:
             raise RuntimeGateError("BlenderProc generator produced no readable summary") from exc
 
-    def _run(self, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self, arguments: Sequence[str], *, failure_type: type[RuntimeGateError]
+    ) -> subprocess.CompletedProcess[str]:
         try:
             result = subprocess.run(
                 (self.executable, *arguments),
@@ -68,7 +70,7 @@ class BlenderProcRuntime:
             raise EnvironmentNotReady(f"BlenderProc executable not found: {self.executable}") from exc
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
-            raise EnvironmentNotReady(f"BlenderProc runtime is not ready: {detail}")
+            raise failure_type(f"BlenderProc command failed: {detail}")
         return result
 
 

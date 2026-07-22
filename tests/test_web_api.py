@@ -63,6 +63,15 @@ class WebStudioApiTests(unittest.TestCase):
 
             self.assertEqual(422, response.status_code)
 
+    def test_app_uses_the_studio_resolved_workspace_for_static_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            app = create_app(workspace=workspace)
+
+            self.assertEqual(workspace.resolve(), app.state.workspace)
+            self.assertEqual(workspace.resolve(), app.state.studio.workspace)
+
 
 if __name__ == "__main__":
     unittest.main()

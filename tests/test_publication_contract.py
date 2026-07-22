@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import asdict
@@ -70,6 +71,33 @@ class PublicationContractTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "no confirmed"):
                 second.run_next()
+
+    def test_read_apis_reload_durable_state_from_another_studio_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            first = StudioService(workspace=workspace, renderer=BlenderProcRenderer())
+            job = first.create_job(_brief())
+            second = StudioService(workspace=workspace, renderer=BlenderProcRenderer())
+
+            first.confirm_brief(job.id, confirmed_by="first")
+
+            self.assertEqual("queued", second.get_job(job.id).state.value)
+            self.assertEqual("queued", second.list_jobs()[0].state.value)
+
+    def test_workspace_is_resolved_once_for_cross_process_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            current_dir = root / "current"
+            workspace = root / "workspace"
+            current_dir.mkdir()
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(current_dir)
+                studio = StudioService(workspace=Path("../workspace"), renderer=BlenderProcRenderer())
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(workspace.resolve(), studio.workspace)
 
     def test_cross_process_state_transitions_refresh_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -161,6 +189,16 @@ class PublicationContractTests(unittest.TestCase):
             studio.record_review(job.id, reviewer="leo", approved=True)
 
             with self.assertRaisesRegex(ValueError, "render backend"):
+                studio.publish(job.id, published_by="leo")
+
+    def test_publication_rejects_an_unowned_renderer_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            studio, job = _ready_building_use_job(Path(temp_dir))
+            reviewed = studio.record_review(job.id, reviewer="leo", approved=True)
+            reviewed.renderer_identity = "unowned-renderer"
+            studio._save(reviewed)
+
+            with self.assertRaisesRegex(ValueError, "owned BlenderProc identity"):
                 studio.publish(job.id, published_by="leo")
 
     def test_confirmed_brief_distributions_are_immutable(self) -> None:
